@@ -71,6 +71,8 @@ const BOSS_INTERVAL = 10; // every 10 points
 // --- Game state ---
 let bird, pipes, score, bestScore = 0, frameCount, state;
 let bossMode, boss, nextBossAt, bossFlash, bossMessage, bossMessageTimer;
+let flipped = false;
+const FLIP_PIPE_CHANCE = 0.18; // ~18% chance a pipe is a flip pipe
 
 function resetGame() {
   bird = { x: 80, y: 250, vy: 0, rotation: 0, flapFrame: 0 };
@@ -78,6 +80,8 @@ function resetGame() {
   score = 0;
   frameCount = 0;
   state = 'menu';
+  flipped = false;
+  canvas.style.transform = '';
   bossMode = false;
   boss = null;
   nextBossAt = BOSS_INTERVAL;
@@ -90,6 +94,9 @@ resetGame();
 function startBoss() {
   bossMode = true;
   pipes = [];
+  flipped = false;
+  canvas.style.transition = 'transform 0.4s ease';
+  canvas.style.transform = '';
   bossFlash = 0;
   bossMessage = 'BOSS FIGHT!';
   bossMessageTimer = 120;
@@ -282,30 +289,63 @@ function drawBoss() {
   }
 }
 
-function drawPipe(px, topH) {
+function drawPipe(px, topH, isFlipPipe) {
   const s = S;
   const w = PIPE_WIDTH * s;
   const canvasH = canvas.height;
   const x = px * s;
   const capH = 20 * s;
   const capExtra = 6 * s;
-  const grad1 = ctx.createLinearGradient(x, 0, x + w, 0);
-  grad1.addColorStop(0, '#5a9e3e');
-  grad1.addColorStop(0.3, '#7ec850');
-  grad1.addColorStop(0.7, '#5a9e3e');
-  grad1.addColorStop(1, '#3d7a28');
-  ctx.fillStyle = grad1;
-  ctx.fillRect(x, 0, w, topH * s);
-  ctx.fillRect(x - capExtra, topH * s - capH, w + capExtra * 2, capH);
-  ctx.strokeStyle = '#2e6b1e';
-  ctx.lineWidth = 2 * s;
-  ctx.strokeRect(x - capExtra, topH * s - capH, w + capExtra * 2, capH);
-  const bottomY = (topH + PIPE_GAP) * s;
-  ctx.fillStyle = grad1;
-  ctx.fillRect(x, bottomY, w, canvasH - bottomY);
-  ctx.fillRect(x - capExtra, bottomY, w + capExtra * 2, capH);
-  ctx.strokeStyle = '#2e6b1e';
-  ctx.strokeRect(x - capExtra, bottomY, w + capExtra * 2, capH);
+  if (isFlipPipe) {
+    // Special flip pipe - purple/magenta with glow
+    const grad1 = ctx.createLinearGradient(x, 0, x + w, 0);
+    grad1.addColorStop(0, '#8e24aa');
+    grad1.addColorStop(0.3, '#ce93d8');
+    grad1.addColorStop(0.7, '#8e24aa');
+    grad1.addColorStop(1, '#4a148c');
+    ctx.fillStyle = grad1;
+    ctx.fillRect(x, 0, w, topH * s);
+    ctx.fillRect(x - capExtra, topH * s - capH, w + capExtra * 2, capH);
+    ctx.strokeStyle = '#4a148c';
+    ctx.lineWidth = 2 * s;
+    ctx.strokeRect(x - capExtra, topH * s - capH, w + capExtra * 2, capH);
+    const bottomY = (topH + PIPE_GAP) * s;
+    ctx.fillStyle = grad1;
+    ctx.fillRect(x, bottomY, w, canvasH - bottomY);
+    ctx.fillRect(x - capExtra, bottomY, w + capExtra * 2, capH);
+    ctx.strokeStyle = '#4a148c';
+    ctx.strokeRect(x - capExtra, bottomY, w + capExtra * 2, capH);
+    // Rotating arrows icon in the gap to hint at flip
+    const gapCenterY = (topH + PIPE_GAP / 2) * s;
+    const gapCenterX = x + w / 2;
+    ctx.save();
+    ctx.translate(gapCenterX, gapCenterY);
+    ctx.rotate(Date.now() / 400);
+    ctx.font = `bold ${28 * s}px 'Segoe UI', Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#e1bee7';
+    ctx.fillText('\u21C5', 0, 0);
+    ctx.restore();
+  } else {
+    const grad1 = ctx.createLinearGradient(x, 0, x + w, 0);
+    grad1.addColorStop(0, '#5a9e3e');
+    grad1.addColorStop(0.3, '#7ec850');
+    grad1.addColorStop(0.7, '#5a9e3e');
+    grad1.addColorStop(1, '#3d7a28');
+    ctx.fillStyle = grad1;
+    ctx.fillRect(x, 0, w, topH * s);
+    ctx.fillRect(x - capExtra, topH * s - capH, w + capExtra * 2, capH);
+    ctx.strokeStyle = '#2e6b1e';
+    ctx.lineWidth = 2 * s;
+    ctx.strokeRect(x - capExtra, topH * s - capH, w + capExtra * 2, capH);
+    const bottomY = (topH + PIPE_GAP) * s;
+    ctx.fillStyle = grad1;
+    ctx.fillRect(x, bottomY, w, canvasH - bottomY);
+    ctx.fillRect(x - capExtra, bottomY, w + capExtra * 2, capH);
+    ctx.strokeStyle = '#2e6b1e';
+    ctx.strokeRect(x - capExtra, bottomY, w + capExtra * 2, capH);
+  }
 }
 
 function drawGround() {
@@ -587,7 +627,8 @@ function update() {
       const minTop = 60;
       const maxTop = 600 - 60 - PIPE_GAP - 60;
       const topH = minTop + Math.random() * (maxTop - minTop);
-      pipes.push({ x: 400, topH: topH, scored: false });
+      const isFlip = Math.random() < FLIP_PIPE_CHANCE;
+      pipes.push({ x: 400, topH: topH, scored: false, flipPipe: isFlip });
     }
 
     // Move pipes
@@ -596,6 +637,12 @@ function update() {
       if (!pipes[i].scored && pipes[i].x + PIPE_WIDTH < bird.x) {
         pipes[i].scored = true;
         score++;
+        // Flip the world if it's a flip pipe
+        if (pipes[i].flipPipe) {
+          flipped = !flipped;
+          canvas.style.transition = 'transform 0.4s ease';
+          canvas.style.transform = flipped ? 'rotate(180deg)' : '';
+        }
         // Check boss trigger
         if (score >= nextBossAt) {
           startBoss();
@@ -620,7 +667,7 @@ function render() {
   drawBackground();
   drawGround();
   if (!bossMode) {
-    for (const p of pipes) drawPipe(p.x, p.topH);
+    for (const p of pipes) drawPipe(p.x, p.topH, p.flipPipe);
   }
   if (boss) drawBoss();
   drawBird(bird.x, bird.y, bird.rotation, bird.flapFrame);
