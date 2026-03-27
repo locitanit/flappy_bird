@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Flappy Bird</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #222;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  canvas {
+    display: block;
+    background: #70c5ce;
+    border-radius: 8px;
+    box-shadow: 0 0 30px rgba(0,0,0,0.5);
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// --- Responsive sizing ---
+function resize() {
+  const maxW = 400, maxH = 600;
+  const ratio = maxW / maxH;
+  let w = window.innerWidth;
+  let h = window.innerHeight;
+  if (w / h > ratio) {
+    canvas.height = Math.min(h - 20, maxH);
+    canvas.width = Math.round(canvas.height * ratio);
+  } else {
+    canvas.width = Math.min(w - 20, maxW);
+    canvas.height = Math.round(canvas.width / ratio);
+  }
+  S = canvas.width / maxW;
+}
+let S = 1;
+resize();
+window.addEventListener('resize', resize);
+
+// --- Game constants (base values at 400x600) ---
+const GRAVITY = 0.45;
+const FLAP_STRENGTH = -7.5;
+const PIPE_WIDTH = 52;
+const PIPE_GAP = 140;
+const PIPE_SPEED = 2.5;
+const BIRD_SIZE = 24;
+const PIPE_SPAWN_INTERVAL = 90;
+const GROUND_Y = 540; // 600 - 60
+
+// --- Boss constants ---
+const BOSS_SIZE = 50;
+const BOSS_HP = 3;
+const BOSS_SCORE_REWARD = 5;
+const BOSS_INTERVAL = 10; // every 10 points
+
+// --- Game state ---
+let bird, pipes, score, bestScore = 0, frameCount, state;
+let bossMode, boss, nextBossAt, bossFlash, bossMessage, bossMessageTimer;
+
+function resetGame() {
+  bird = { x: 80, y: 250, vy: 0, rotation: 0, flapFrame: 0 };
+  pipes = [];
+  score = 0;
+  frameCount = 0;
+  state = 'menu';
+  bossMode = false;
+  boss = null;
+  nextBossAt = BOSS_INTERVAL;
+  bossFlash = 0;
+  bossMessage = '';
+  bossMessageTimer = 0;
+}
+resetGame();
+
+function startBoss() {
+  bossMode = true;
+  pipes = [];
+  bossFlash = 0;
+  bossMessage = 'BOSS FIGHT!';
+  bossMessageTimer = 120;
+  boss = {
+    x: 420,
+    y: 250,
+    hp: BOSS_HP,
+    state: 'enter',   // enter, idle, windup, charge, stunned, dying
+    timer: 0,
+    targetY: 250,
+    chargeTargetX: 0,
+    chargeTargetY: 0,
+    vx: 0,
+    vy: 0,
+    hurtCooldown: 0,
+    idleBaseY: 250,
+    deathTimer: 0
+  };
+}
+
+function endBoss() {
+  bossMode = false;
+  boss = null;
+  score += BOSS_SCORE_REWARD;
+  nextBossAt = score + BOSS_INTERVAL;
+  bossMessage = '+5 PONT!';
+  bossMessageTimer = 90;
+  pipes = [];
+  frameCount = 0;
+}
+
+function flap() {
+  if (state === 'menu') {
+    state = 'play';
+    bird.vy = FLAP_STRENGTH;
+    bird.flapFrame = 10;
+  } else if (state === 'play') {
+    bird.vy = FLAP_STRENGTH;
+    bird.flapFrame = 10;
+  } else if (state === 'dead') {
+    resetGame();
+  }
+}
+
+// --- Input ---
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); flap(); }
+});
+canvas.addEventListener('pointerdown', e => { e.preventDefault(); flap(); });
+
+// --- Drawing helpers ---
+function drawBird(x, y, rotation, flapFrame) {
+  const s = S;
+  ctx.save();
+  ctx.translate(x * s, y * s);
+  ctx.rotate(rotation);
+  ctx.fillStyle = '#f7dc6f';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, BIRD_SIZE * s * 0.9, BIRD_SIZE * s * 0.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#d4a017';
+  ctx.lineWidth = 2 * s;
+  ctx.stroke();
+  const wingY = flapFrame > 0 ? -6 * s : 3 * s;
+  ctx.fillStyle = '#f0b90b';
+  ctx.beginPath();
+  ctx.ellipse(-4 * s, wingY, 10 * s, 6 * s, -0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(10 * s, -6 * s, 6 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(12 * s, -6 * s, 3 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#e74c3c';
+  ctx.beginPath();
+  ctx.moveTo(16 * s, -2 * s);
+  ctx.lineTo(26 * s, 2 * s);
+  ctx.lineTo(16 * s, 6 * s);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBoss() {
+  if (!boss) return;
+  const s = S;
+  const bx = boss.x * s;
+  const by = boss.y * s;
+  const sz = BOSS_SIZE * s;
+
+  // Flash when hurt
+  const isFlashing = boss.hurtCooldown > 0 && Math.floor(boss.hurtCooldown / 4) % 2 === 0;
+
+  ctx.save();
+  ctx.translate(bx, by);
+
+  // Body - big red enemy
+  ctx.fillStyle = isFlashing ? '#fff' : (boss.state === 'dying' ? '#888' : '#c0392b');
+  ctx.beginPath();
+  ctx.ellipse(0, 0, sz * 0.9, sz * 0.75, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#7b241c';
+  ctx.lineWidth = 3 * s;
+  ctx.stroke();
+
+  // Spikes on top (head area where bird can stomp)
+  if (boss.state !== 'dying') {
+    ctx.fillStyle = isFlashing ? '#fcc' : '#e74c3c';
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * 12 * s - 6 * s, -sz * 0.65);
+      ctx.lineTo(i * 12 * s, -sz * 0.95);
+      ctx.lineTo(i * 12 * s + 6 * s, -sz * 0.65);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  // Angry eyes
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.ellipse(-15 * s, -8 * s, 10 * s, 8 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(15 * s, -8 * s, 10 * s, 8 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Pupils – look toward bird
+  const lookDir = bird.x < boss.x ? -1 : 1;
+  ctx.fillStyle = boss.state === 'dying' ? '#999' : '#c0392b';
+  ctx.beginPath();
+  ctx.arc(-15 * s + lookDir * 3 * s, -8 * s, 5 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(15 * s + lookDir * 3 * s, -8 * s, 5 * s, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Angry eyebrows
+  if (boss.state !== 'dying') {
+    ctx.strokeStyle = '#2c0b0b';
+    ctx.lineWidth = 3 * s;
+    ctx.beginPath();
+    ctx.moveTo(-25 * s, -20 * s);
+    ctx.lineTo(-8 * s, -16 * s);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(25 * s, -20 * s);
+    ctx.lineTo(8 * s, -16 * s);
+    ctx.stroke();
+  }
+
+  // Mouth
+  ctx.fillStyle = '#2c0b0b';
+  ctx.beginPath();
+  if (boss.state === 'charge' || boss.state === 'windup') {
+    // Open mouth when charging
+    ctx.ellipse(0, 14 * s, 14 * s, 10 * s, 0, 0, Math.PI * 2);
+  } else {
+    ctx.moveTo(-12 * s, 14 * s);
+    ctx.quadraticCurveTo(0, 22 * s, 12 * s, 14 * s);
+  }
+  ctx.fill();
+
+  // Charge indicator (windup: "!" exclamation mark)
+  if (boss.state === 'windup') {
+    ctx.fillStyle = '#f1c40f';
+    ctx.font = `bold ${28 * s}px 'Segoe UI', Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('!', 0, -sz - 5 * s);
+  }
+
+  ctx.restore();
+
+  // HP bar above boss
+  if (boss.state !== 'dying') {
+    const barW = 80 * s;
+    const barH = 8 * s;
+    const barX = bx - barW / 2;
+    const barY = by - sz - 18 * s;
+    ctx.fillStyle = '#555';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.fillStyle = boss.hp === 1 ? '#e74c3c' : (boss.hp === 2 ? '#f39c12' : '#2ecc71');
+    ctx.fillRect(barX, barY, barW * (boss.hp / BOSS_HP), barH);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2 * s;
+    ctx.strokeRect(barX, barY, barW, barH);
+  }
+}
+
+function drawPipe(px, topH) {
+  const s = S;
+  const w = PIPE_WIDTH * s;
+  const canvasH = canvas.height;
+  const x = px * s;
+  const capH = 20 * s;
+  const capExtra = 6 * s;
+  const grad1 = ctx.createLinearGradient(x, 0, x + w, 0);
+  grad1.addColorStop(0, '#5a9e3e');
+  grad1.addColorStop(0.3, '#7ec850');
+  grad1.addColorStop(0.7, '#5a9e3e');
+  grad1.addColorStop(1, '#3d7a28');
+  ctx.fillStyle = grad1;
+  ctx.fillRect(x, 0, w, topH * s);
+  ctx.fillRect(x - capExtra, topH * s - capH, w + capExtra * 2, capH);
+  ctx.strokeStyle = '#2e6b1e';
+  ctx.lineWidth = 2 * s;
+  ctx.strokeRect(x - capExtra, topH * s - capH, w + capExtra * 2, capH);
+  const bottomY = (topH + PIPE_GAP) * s;
+  ctx.fillStyle = grad1;
+  ctx.fillRect(x, bottomY, w, canvasH - bottomY);
+  ctx.fillRect(x - capExtra, bottomY, w + capExtra * 2, capH);
+  ctx.strokeStyle = '#2e6b1e';
+  ctx.strokeRect(x - capExtra, bottomY, w + capExtra * 2, capH);
+}
+
+function drawGround() {
+  const s = S;
+  const groundH = 60 * s;
+  const y = canvas.height - groundH;
+  ctx.fillStyle = '#ded895';
+  ctx.fillRect(0, y, canvas.width, groundH);
+  ctx.fillStyle = '#8bc34a';
+  ctx.fillRect(0, y, canvas.width, 12 * s);
+  ctx.strokeStyle = '#6a9e30';
+  ctx.lineWidth = 2 * s;
+  ctx.beginPath();
+  ctx.moveTo(0, y);
+  ctx.lineTo(canvas.width, y);
+  ctx.stroke();
+}
+
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, bossMode ? '#3a1c1c' : '#4ec0ca');
+  grad.addColorStop(0.6, bossMode ? '#5c2e2e' : '#70c5ce');
+  grad.addColorStop(1, bossMode ? '#6e3a3a' : '#b8e8d0');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!bossMode) {
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    const cloudPositions = [[50, 80], [200, 50], [320, 110], [130, 160]];
+    for (const [cx, cy] of cloudPositions) {
+      ctx.beginPath();
+      ctx.ellipse(cx * S, cy * S, 30 * S, 14 * S, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse((cx + 20) * S, (cy - 5) * S, 22 * S, 12 * S, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawScore() {
+  const s = S;
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 3 * s;
+  ctx.font = `bold ${40 * s}px 'Segoe UI', Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.strokeText(score, canvas.width / 2, 55 * s);
+  ctx.fillText(score, canvas.width / 2, 55 * s);
+}
+
+function drawBossMessage() {
+  if (bossMessageTimer <= 0) return;
+  const s = S;
+  const alpha = Math.min(1, bossMessageTimer / 30);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#f1c40f';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 4 * s;
+  ctx.font = `bold ${32 * s}px 'Segoe UI', Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.strokeText(bossMessage, canvas.width / 2, canvas.height * 0.2);
+  ctx.fillText(bossMessage, canvas.width / 2, canvas.height * 0.2);
+  ctx.restore();
+}
+
+function drawMenu() {
+  const s = S;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${36 * s}px 'Segoe UI', Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('Flappy Bird', canvas.width / 2, canvas.height * 0.3);
+  ctx.font = `${18 * s}px 'Segoe UI', Arial, sans-serif`;
+  ctx.fillText('Kattints vagy nyomj SPACE-t', canvas.width / 2, canvas.height * 0.45);
+  ctx.fillText('a játék indításához!', canvas.width / 2, canvas.height * 0.52);
+  if (bestScore > 0) {
+    ctx.font = `bold ${20 * s}px 'Segoe UI', Arial, sans-serif`;
+    ctx.fillStyle = '#f7dc6f';
+    ctx.fillText('Legjobb: ' + bestScore, canvas.width / 2, canvas.height * 0.64);
+  }
+}
+
+function drawDead() {
+  const s = S;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#e74c3c';
+  ctx.font = `bold ${36 * s}px 'Segoe UI', Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('Game Over', canvas.width / 2, canvas.height * 0.3);
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${24 * s}px 'Segoe UI', Arial, sans-serif`;
+  ctx.fillText('Pontszám: ' + score, canvas.width / 2, canvas.height * 0.42);
+  ctx.fillStyle = '#f7dc6f';
+  ctx.fillText('Legjobb: ' + bestScore, canvas.width / 2, canvas.height * 0.52);
+  ctx.fillStyle = '#fff';
+  ctx.font = `${16 * s}px 'Segoe UI', Arial, sans-serif`;
+  ctx.fillText('Kattints az újraindításhoz!', canvas.width / 2, canvas.height * 0.65);
+}
+
+// --- Collision ---
+function collides(bx, by) {
+  if (by + BIRD_SIZE > GROUND_Y || by - BIRD_SIZE < 0) return true;
+  for (const p of pipes) {
+    if (bx + BIRD_SIZE * 0.7 > p.x && bx - BIRD_SIZE * 0.7 < p.x + PIPE_WIDTH) {
+      if (by - BIRD_SIZE * 0.55 < p.topH || by + BIRD_SIZE * 0.55 > p.topH + PIPE_GAP) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Check if bird stomps boss head (bird is above boss center, falling down)
+function checkBossStomp() {
+  if (!boss || boss.hurtCooldown > 0 || boss.state === 'dying') return false;
+  const dx = bird.x - boss.x;
+  const dy = bird.y - boss.y;
+  // Bird must be above boss center and falling, and horizontally close
+  if (dy < -BOSS_SIZE * 0.3 && dy > -BOSS_SIZE * 1.3 &&
+      Math.abs(dx) < BOSS_SIZE * 0.8 && bird.vy > 0) {
+    return true;
+  }
+  return false;
+}
+
+// Check if boss body hits bird (not from top = damage to bird)
+function checkBossHitsBird() {
+  if (!boss || boss.state === 'dying' || boss.state === 'stunned') return false;
+  const dx = bird.x - boss.x;
+  const dy = bird.y - boss.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < (BOSS_SIZE * 0.7 + BIRD_SIZE * 0.5)) {
+    // If bird is clearly above, it's a stomp, not a hit
+    if (dy < -BOSS_SIZE * 0.3 && bird.vy > 0) return false;
+    return true;
+  }
+  return false;
+}
+
+// --- Boss update ---
+function updateBoss() {
+  if (!boss) return;
+
+  if (boss.hurtCooldown > 0) boss.hurtCooldown--;
+  if (bossMessageTimer > 0) bossMessageTimer--;
+
+  switch (boss.state) {
+    case 'enter':
+      // Slide in from right
+      boss.x += (300 - boss.x) * 0.04;
+      boss.y += (250 - boss.y) * 0.04;
+      boss.timer++;
+      if (boss.timer > 60) {
+        boss.state = 'idle';
+        boss.timer = 0;
+        boss.idleBaseY = boss.y;
+      }
+      break;
+
+    case 'idle':
+      // Bob up and down, waiting to charge
+      boss.timer++;
+      boss.y = boss.idleBaseY + Math.sin(boss.timer * 0.03) * 40;
+      // Slowly drift toward a comfortable X
+      boss.x += (300 - boss.x) * 0.01;
+      if (boss.timer > 80 + Math.random() * 60) {
+        boss.state = 'windup';
+        boss.timer = 0;
+        boss.chargeTargetX = bird.x;
+        boss.chargeTargetY = bird.y;
+      }
+      break;
+
+    case 'windup':
+      // Telegraph the charge – shake and pause
+      boss.timer++;
+      boss.x += (Math.random() - 0.5) * 3;
+      if (boss.timer > 45) {
+        boss.state = 'charge';
+        boss.timer = 0;
+        // Aim at bird's current position
+        const angle = Math.atan2(bird.y - boss.y, bird.x - boss.x);
+        const speed = 5;
+        boss.vx = Math.cos(angle) * speed;
+        boss.vy = Math.sin(angle) * speed;
+      }
+      break;
+
+    case 'charge':
+      boss.timer++;
+      boss.x += boss.vx;
+      boss.y += boss.vy;
+      // Clamp to play area
+      boss.y = Math.max(BOSS_SIZE, Math.min(GROUND_Y - BOSS_SIZE, boss.y));
+      // End charge after a while or if it goes off-screen left
+      if (boss.timer > 60 || boss.x < -20) {
+        boss.state = 'idle';
+        boss.timer = 0;
+        boss.idleBaseY = Math.max(100, Math.min(GROUND_Y - 100, boss.y));
+        // Reset position if off-screen
+        if (boss.x < 40) boss.x = 420;
+      }
+      break;
+
+    case 'stunned':
+      boss.timer++;
+      boss.y += Math.sin(boss.timer * 0.2) * 2;
+      if (boss.timer > 50) {
+        boss.state = 'idle';
+        boss.timer = 0;
+        boss.idleBaseY = boss.y;
+      }
+      break;
+
+    case 'dying':
+      boss.deathTimer++;
+      boss.y += 2;
+      boss.x += (Math.random() - 0.5) * 4;
+      if (boss.deathTimer > 60) {
+        endBoss();
+      }
+      break;
+  }
+
+  // Check stomp
+  if (checkBossStomp()) {
+    boss.hp--;
+    boss.hurtCooldown = 30;
+    bird.vy = FLAP_STRENGTH * 1.2; // bounce bird up
+    bird.flapFrame = 10;
+    if (boss.hp <= 0) {
+      boss.state = 'dying';
+      boss.deathTimer = 0;
+      bossMessage = 'BOSS LEGYŐZVE!';
+      bossMessageTimer = 60;
+    } else {
+      boss.state = 'stunned';
+      boss.timer = 0;
+      bossMessage = `TALÁLT! Még ${boss.hp}x`;
+      bossMessageTimer = 45;
+    }
+  }
+
+  // Check boss hits bird (kill bird)
+  if (checkBossHitsBird()) {
+    state = 'dead';
+    if (score > bestScore) bestScore = score;
+  }
+}
+
+// --- Update ---
+function update() {
+  if (state !== 'play') return;
+  frameCount++;
+
+  // Bird physics
+  bird.vy += GRAVITY;
+  bird.y += bird.vy;
+  bird.rotation = Math.min(bird.vy * 0.06, Math.PI / 4);
+  if (bird.flapFrame > 0) bird.flapFrame--;
+
+  if (bossMode) {
+    // Boss mode – no pipes, just boss fight
+    updateBoss();
+    // Ground/ceiling kill
+    if (bird.y + BIRD_SIZE > GROUND_Y || bird.y - BIRD_SIZE < 0) {
+      state = 'dead';
+      if (score > bestScore) bestScore = score;
+    }
+  } else {
+    // Normal mode – pipes
+    if (bossMessageTimer > 0) bossMessageTimer--;
+
+    // Spawn pipes
+    if (frameCount % PIPE_SPAWN_INTERVAL === 0) {
+      const minTop = 60;
+      const maxTop = 600 - 60 - PIPE_GAP - 60;
+      const topH = minTop + Math.random() * (maxTop - minTop);
+      pipes.push({ x: 400, topH: topH, scored: false });
+    }
+
+    // Move pipes
+    for (let i = pipes.length - 1; i >= 0; i--) {
+      pipes[i].x -= PIPE_SPEED;
+      if (!pipes[i].scored && pipes[i].x + PIPE_WIDTH < bird.x) {
+        pipes[i].scored = true;
+        score++;
+        // Check boss trigger
+        if (score >= nextBossAt) {
+          startBoss();
+          return;
+        }
+      }
+      if (pipes[i].x + PIPE_WIDTH < -10) {
+        pipes.splice(i, 1);
+      }
+    }
+
+    // Collision
+    if (collides(bird.x, bird.y)) {
+      state = 'dead';
+      if (score > bestScore) bestScore = score;
+    }
+  }
+}
+
+// --- Render ---
+function render() {
+  drawBackground();
+  drawGround();
+  if (!bossMode) {
+    for (const p of pipes) drawPipe(p.x, p.topH);
+  }
+  if (boss) drawBoss();
+  drawBird(bird.x, bird.y, bird.rotation, bird.flapFrame);
+  if (state === 'play') {
+    drawScore();
+    drawBossMessage();
+  }
+  if (state === 'menu') {
+    drawBird(bird.x, 250 + Math.sin(Date.now() / 300) * 10, 0, (Date.now() % 600) < 300 ? 10 : 0);
+    drawScore();
+    drawMenu();
+  }
+  if (state === 'dead') {
+    drawScore();
+    drawDead();
+  }
+}
+
+// --- Game loop ---
+function loop() {
+  update();
+  render();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
