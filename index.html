@@ -2,7 +2,7 @@
 <html lang="hu">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Flappy Bird</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -24,6 +24,7 @@
     background: #70c5ce;
     border-radius: 8px;
     box-shadow: 0 0 30px rgba(0,0,0,0.5);
+    touch-action: none;
   }
 </style>
 </head>
@@ -100,6 +101,10 @@ function startBoss() {
   bossFlash = 0;
   bossMessage = 'BOSS FIGHT!';
   bossMessageTimer = 120;
+  // Reset bird to safe position
+  bird.y = 250;
+  bird.vy = 0;
+  bird.rotation = 0;
   boss = {
     x: 420,
     y: 250,
@@ -146,6 +151,9 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); flap(); }
 });
 canvas.addEventListener('pointerdown', e => { e.preventDefault(); flap(); });
+canvas.addEventListener('touchstart', e => { e.preventDefault(); }, { passive: false });
+canvas.addEventListener('touchmove', e => { e.preventDefault(); }, { passive: false });
+document.addEventListener('gesturestart', e => { e.preventDefault(); });
 
 // --- Drawing helpers ---
 function drawBird(x, y, rotation, flapFrame) {
@@ -476,7 +484,7 @@ function checkBossStomp() {
 
 // Check if boss body hits bird (not from top = damage to bird)
 function checkBossHitsBird() {
-  if (!boss || boss.state === 'dying' || boss.state === 'stunned') return false;
+  if (!boss || boss.state === 'dying' || boss.state === 'stunned' || boss.state === 'enter') return false;
   const dx = bird.x - boss.x;
   const dy = bird.y - boss.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
